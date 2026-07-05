@@ -126,6 +126,7 @@ class GeminiGenerator:
             system_instruction=_build_system_prompt(),
         )
 
+    @traceable(run_type="llm", name="GeminiGenerateStream")
     def generate_stream(
         self,
         query: str,
@@ -133,56 +134,18 @@ class GeminiGenerator:
         chat_history: List[Dict[str, str]] | None = None,
         langsmith_extra: dict = None,
     ) -> Generator[str, None, None]:
-        from langsmith.run_trees import RunTree
-
         chat_history = chat_history or []
         is_first_message = len(chat_history) == 0
 
         user_prompt = _build_user_prompt(query, context, chat_history, is_first_message)
 
-        # Trích xuất extra data nếu có truyền từ ngoài vào
-        extra_data = langsmith_extra or {}
-        extra_data.setdefault("metadata", {})
-        extra_data["metadata"]["ls_provider"] = "google"
-        extra_data["metadata"]["ls_model_name"] = self.model.model_name.replace("models/", "")
-
-        run = RunTree(
-            name="GeminiGenerateStream",
-            run_type="llm",
-            inputs={"query": query, "context": context},
-            extra=extra_data
-        )
-        run.post()
-
         try:
-            full_output = ""
             response = self.model.generate_content(user_prompt, stream=True)
             for chunk in response:
                 if chunk.text:
-                    full_output += chunk.text
                     yield chunk.text
-            
-            # Đếm token thủ công vì stream mode của genai có thể không trả về usage_metadata
-            try:
-                in_tokens = self.model.count_tokens(user_prompt).total_tokens
-                out_tokens = self.model.count_tokens(full_output).total_tokens
-            except Exception:
-                in_tokens, out_tokens = 0, 0
-
-            # Ghi trực tiếp vào outputs
-            run.end(outputs={
-                "output": full_output,
-                "usage_metadata": {
-                    "input_tokens": in_tokens,
-                    "output_tokens": out_tokens,
-                    "total_tokens": in_tokens + out_tokens,
-                }
-            })
-            run.patch()
         except Exception as e:
             logger.error(f"Generation failed: {e}")
-            run.end(error=str(e))
-            run.patch()
             yield f"\n[Lỗi khi tạo câu trả lời: {e}]"
 
     @traceable(run_type="llm", name="GeminiGenerate")

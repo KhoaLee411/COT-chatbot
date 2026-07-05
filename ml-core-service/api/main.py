@@ -110,19 +110,37 @@ async def chat(request: ChatRequest):
                 return
 
             # Bước 3: In-scope + có chunks → stream từ generator
-            for token in app_state.generator.generate_stream(
-                query=state.get("standalone_query") or query,
-                context=state["chunks"],
-                chat_history=chat_history,
-                langsmith_extra={
-                    "tags": ["chatbot_api", f"user:{request.user_id}"],
-                    "metadata": {
-                        "user_id": request.user_id,
-                        "session_id": request.user_id,
-                    }
-                }
-            ):
+            queue: asyncio.Queue = asyncio.Queue()
+            loop = asyncio.get_event_loop()
+
+            def producer():
+                try:
+                    for token in app_state.generator.generate_stream(
+                        query=state.get("standalone_query") or query,
+                        context=state["chunks"],
+                        chat_history=chat_history,
+                        langsmith_extra={
+                            "tags": ["chatbot_api", f"user:{request.user_id}"],
+                            "metadata": {
+                                "user_id": request.user_id,
+                                "session_id": request.user_id,
+                            }
+                        }
+                    ):
+                        loop.call_soon_threadsafe(queue.put_nowait, token)
+                except Exception as e:
+                    logger.error(f"Stream generation error: {e}")
+                    loop.call_soon_threadsafe(queue.put_nowait, "\n[An error occurred during generation.]")
+                finally:
+                    loop.call_soon_threadsafe(queue.put_nowait, None)
+
+            task = asyncio.create_task(asyncio.to_thread(producer))
+            while True:
+                token = await queue.get()
+                if token is None:
+                    break
                 yield token
+            await task
 
         except Exception as e:
             logger.error(f"Chat error: {e}")

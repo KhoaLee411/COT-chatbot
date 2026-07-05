@@ -116,27 +116,30 @@ class S3Retriever:
 
         hits = response.get("vectors", response.get("matches", []))
 
-        results: List[Dict[str, Any]] = []
-        for hit in hits:
-            distance = hit.get("distance", 1.0)
-            if distance > RETRIEVAL_DISTANCE_THRESHOLD:
-                continue  
+        valid_hits = [
+            h for h in hits 
+            if h.get("distance", 1.0) <= RETRIEVAL_DISTANCE_THRESHOLD
+        ]
 
+        def fetch(hit: Dict[str, Any]) -> Dict[str, Any]:
             metadata = hit.get("metadata", {})
             chunk_key = metadata.get("chunk_key")
             filename = metadata.get("filename")
 
-            content = ""
             if chunk_key:
                 content = self._fetch_chunk_content(chunk_key, filename) or ""
             else:
                 content = metadata.get("content", "")
 
-            results.append({
+            return {
                 "content": content,
                 "metadata": metadata,
-                "score": distance,
-            })
+                "score": hit.get("distance", 1.0),
+            }
+
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=min(8, len(valid_hits) or 1)) as ex:
+            results = list(ex.map(fetch, valid_hits))
 
         logger.debug(f"Retrieval: {len(results)}/{len(hits)} hits passed threshold.")
         return results

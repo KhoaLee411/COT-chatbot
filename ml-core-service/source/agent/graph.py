@@ -6,14 +6,13 @@ from source.rag_core.retriever import S3Retriever
 from source.rag_core.generator import GeminiGenerator
 
 
-def route_after_guardrails(state: AgentState) -> str:
-    if state.get("is_malicious") or state.get("is_nonsense"):
-        return "generator"
-    return "analyzer"
-
-
-def route_after_analyzer(state: AgentState) -> str:
-    if state.get("is_greeting") or state.get("is_out_of_scope"):
+def route_after_classify(state: AgentState) -> str:
+    if (
+        state.get("is_malicious")
+        or state.get("is_nonsense")
+        or state.get("is_greeting")
+        or state.get("is_out_of_scope")
+    ):
         return "generator"
     return "retriever"
 
@@ -23,22 +22,15 @@ def build_graph(retriever: S3Retriever, generator: GeminiGenerator):
 
     workflow = StateGraph(AgentState)
 
-    workflow.add_node("guardrails", nodes["guardrails"])
-    workflow.add_node("analyzer", nodes["analyzer"])
+    workflow.add_node("classify", nodes["classify"])
     workflow.add_node("retriever", nodes["retriever"])
     workflow.add_node("generator", nodes["generator"])
 
-    workflow.set_entry_point("guardrails")
+    workflow.set_entry_point("classify")
 
     workflow.add_conditional_edges(
-        "guardrails",
-        route_after_guardrails,
-        {"generator": "generator", "analyzer": "analyzer"},
-    )
-
-    workflow.add_conditional_edges(
-        "analyzer",
-        route_after_analyzer,
+        "classify",
+        route_after_classify,
         {"generator": "generator", "retriever": "retriever"},
     )
 
